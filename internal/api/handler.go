@@ -42,9 +42,17 @@ func New(
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/classify", h.handleClassify)
 	mux.HandleFunc("POST /v1/check", h.handleCheck)
+	// 分类体系
+	mux.HandleFunc("GET /v1/categories", h.handleCategories)
+	// 平台黑名单
+	mux.HandleFunc("GET /v1/blocklist/global", h.handleGlobalBlocklist)
+	// 广告主黑名单（旧路由保持兼容）
 	mux.HandleFunc("GET /v1/blocklists", h.handleListBlocklist)
 	mux.HandleFunc("POST /v1/blocklists", h.handleAddBlocklist)
 	mux.HandleFunc("DELETE /v1/blocklists", h.handleDeleteBlocklist)
+	// 广告主黑名单（RESTful 路由）
+	mux.HandleFunc("GET /v1/blocklist/advertiser/{id}", h.handleListAdvertiserBlocklist)
+	mux.HandleFunc("POST /v1/blocklist/advertiser/{id}", h.handlePostAdvertiserBlocklist)
 	mux.HandleFunc("GET /health", handleHealth)
 }
 
@@ -217,6 +225,78 @@ func (h *Handler) handleDeleteBlocklist(w http.ResponseWriter, r *http.Request) 
 	}
 	h.advBL.DeleteRule(req.AdvertiserID, req.Type, req.Value)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// handleCategories GET /v1/categories - 返回 IAB Content Taxonomy 3.0 分类列表。
+func (h *Handler) handleCategories(w http.ResponseWriter, _ *http.Request) {
+	cats := classifier.DefaultTaxonomy()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"categories": cats,
+		"total":      len(cats),
+	})
+}
+
+// handleGlobalBlocklist GET /v1/blocklist/global - 返回平台级全局黑名单（类别 + 域名）。
+func (h *Handler) handleGlobalBlocklist(w http.ResponseWriter, _ *http.Request) {
+	type GlobalBlocklist struct {
+		Categories []string `json:"blocked_categories"`
+		Domains    []string `json:"blocked_domains"`
+	}
+	writeJSON(w, http.StatusOK, GlobalBlocklist{
+		Categories: h.platBL.BlockedCategories(),
+		Domains:    h.platBL.BlockedDomains(),
+	})
+}
+
+// handleListAdvertiserBlocklist GET /v1/blocklist/advertiser/{id} - 查询广告主黑名单。
+func (h *Handler) handleListAdvertiserBlocklist(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	advID, err := strconv.ParseInt(id, 10, 64)
+	if err != nil || advID <= 0 {
+		writeError(w, http.StatusBadRequest, "invalid advertiser id")
+		return
+	}
+	rules := h.advBL.ListRules(advID)
+	writeJSON(w, http.StatusOK, map[string]any{"rules": rules, "total": len(rules)})
+}
+
+// handlePostAdvertiserBlocklist POST /v1/blocklist/advertiser/{id} - 添加广告主黑名单规则。
+func (h *Handler) handlePostAdvertiserBlocklist(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	advID, err := strconv.ParseInt(id, 10, 64)
+	if err != nil || advID <= 0 {
+		writeError(w, http.StatusBadRequest, "invalid advertiser id")
+		return
+	}
+	var req struct {
+		Type   string `json:"type"`
+		Value  string `json:"value"`
+		Action string `json:"action"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Type == "" || req.Value == "" {
+		writeError(w, http.StatusBadRequest, "type and value are required")
+		return
+	}
+	action := req.Action
+	if action == "" {
+		action = "block"
+	}
+	validTypes := map[string]bool{"category": true, "domain": true, "keyword": true}
+	if !validTypes[req.Type] {
+		writeError(w, http.StatusBadRequest, "type must be category, domain, or keyword")
+		return
+	}
+	h.advBL.AddRule(blocklist.Rule{
+		AdvertiserID: advID,
+		Type:         req.Type,
+		Value:        req.Value,
+		Action:       action,
+	})
+	writeJSON(w, http.StatusCreated, map[string]string{"status": "created"})
 }
 
 func handleHealth(w http.ResponseWriter, _ *http.Request) {

@@ -59,3 +59,21 @@ func (p *PlatformBlocklist) CheckCategories(cats []string) string {
 	}
 	return ""
 }
+
+// BlockedCategories 返回平台屏蔽的类别列表（用于 API 展示）。
+func (p *PlatformBlocklist) BlockedCategories() []string {
+	result := make([]string, 0, len(p.categories))
+	for cat := range p.categories {
+		result = append(result, cat)
+	}
+	return result
+}
+
+// BlockedDomains 返回平台屏蔽的域名列表（用于 API 展示）。
+func (p *PlatformBlocklist) BlockedDomains() []string {
+	result := make([]string, 0, len(p.domains))
+	for d := range p.domains {
+		result = append(result, d)
+	}
+	return result
+}
